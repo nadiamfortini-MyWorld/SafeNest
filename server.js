@@ -65,6 +65,72 @@ app.get('/api/schools', async (req, res) => {
   }
 });
 
+// ── US Real Estate Listings API (via RapidAPI) ──
+
+app.get('/api/rentals', async (req, res) => {
+  const { city, state = 'WA', limit = 20 } = req.query;
+
+  if (!city) {
+    return res.status(400).json({ error: 'city is required' });
+  }
+
+  try {
+    const location = `${city}, ${state}`;
+    const url = `https://us-real-estate-listings.p.rapidapi.com/for-rent?location=${encodeURIComponent(location)}&limit=${limit}`;
+
+    const response = await fetch(url, {
+      headers: {
+        'x-rapidapi-key': process.env.RAPIDAPI_KEY,
+        'x-rapidapi-host': 'us-real-estate-listings.p.rapidapi.com',
+      },
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('Rental API error:', response.status, text);
+      return res.status(response.status).json({ error: 'Rental API error', detail: text });
+    }
+
+    const data = await response.json();
+
+    const listings = (data.listings || []).map(l => {
+      const desc = l.description || {};
+      const loc = l.location?.address || {};
+      const photo = l.primary_photo?.href || l.photos?.[0]?.href || null;
+      const photos = (l.photos || []).map(p => p.href).filter(Boolean);
+
+      return {
+        id: l.property_id || l.listing_id,
+        title: desc.name || `${desc.beds_min ?? '?'} Bed ${desc.type || 'Rental'} in ${loc.city || city}`,
+        type: desc.type || 'unknown',
+        price: l.list_price_min || l.list_price || 0,
+        priceMax: l.list_price_max || null,
+        bedrooms: desc.beds_min ?? desc.beds ?? null,
+        bathrooms: desc.baths_min ?? desc.baths ?? null,
+        sqft: desc.sqft_min ?? desc.sqft ?? null,
+        address: loc.line ? `${loc.line}${loc.unit ? ` ${loc.unit}` : ''}, ${loc.city}, ${loc.state_code} ${loc.postal_code}` : '',
+        city: loc.city || city,
+        state: loc.state_code || state,
+        zip: loc.postal_code,
+        lat: loc.coordinate?.lat,
+        lng: loc.coordinate?.lon,
+        image: photo,
+        images: photos.length > 0 ? photos : (photo ? [photo] : []),
+        tags: l.tags || [],
+        pets: (l.tags || []).includes('pets_allowed'),
+        listDate: l.list_date,
+        href: l.href,
+        photoCount: l.photo_count || photos.length,
+      };
+    }).filter(l => l.price > 0);
+
+    res.json({ listings, total: listings.length });
+  } catch (err) {
+    console.error('Rentals fetch error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch rental data' });
+  }
+});
+
 // ── FBI Crime Data API (free, no key needed) ──
 
 app.get('/api/crime/state/:stateAbbr', async (req, res) => {

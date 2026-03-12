@@ -8,8 +8,25 @@ let currentFilters = { search: '', minPrice: 0, maxPrice: 5000, bedrooms: 'any',
 // Cache for live API data
 let liveSchoolsCache = {};
 let liveCrimeCache = {};
+let liveRentalsCache = {};
 
 // ── Live API Calls ──
+
+async function fetchLiveRentals(city, state = 'WA') {
+  const key = `${city}-${state}`;
+  if (liveRentalsCache[key]) return liveRentalsCache[key];
+
+  try {
+    const resp = await fetch(`/api/rentals?city=${encodeURIComponent(city)}&state=${state}&limit=20`);
+    if (!resp.ok) throw new Error('API error');
+    const data = await resp.json();
+    liveRentalsCache[key] = data.listings || [];
+    return liveRentalsCache[key];
+  } catch (err) {
+    console.warn('Rental API fallback to mock data:', err.message);
+    return null;
+  }
+}
 
 async function fetchLiveSchools(neighborhood) {
   const hood = NEIGHBORHOODS.find(n => n.id === neighborhood);
@@ -224,7 +241,39 @@ function renderListings() {
     <div class="listing-list">
       ${filtered.length ? filtered.map(l => renderListingCard(l)).join('') : '<div class="empty-state">😕 No listings match your filters. Try adjusting them!</div>'}
     </div>
+
+    <div id="live-rentals-section">
+      <div class="loading-hint" style="text-align:center;padding:20px">⏳ Loading live rental listings...</div>
+    </div>
   `;
+
+  // Fetch live rentals for the current search city
+  const searchCity = currentFilters.city !== 'all' ? currentFilters.city : (currentFilters.search || 'Seattle');
+  fetchLiveRentals(searchCity).then(liveListings => {
+    const container = document.getElementById('live-rentals-section');
+    if (container && liveListings && liveListings.length > 0) {
+      // Filter live listings by current filters
+      let filtered = liveListings;
+      if (currentFilters.maxPrice < 5000) filtered = filtered.filter(l => l.price <= currentFilters.maxPrice);
+      if (currentFilters.bedrooms !== 'any') {
+        const beds = parseInt(currentFilters.bedrooms);
+        filtered = filtered.filter(l => beds === 3 ? (l.bedrooms >= 3) : (l.bedrooms === beds));
+      }
+      if (currentFilters.pets) filtered = filtered.filter(l => l.pets);
+
+      container.innerHTML = `
+        <div style="padding:0 16px">
+          <div class="live-badge" style="margin-top:16px">🟢 Live data from Realtor.com — ${filtered.length} rentals in ${searchCity}</div>
+        </div>
+        <div class="listing-list" style="margin-top:12px">
+          ${filtered.map(l => renderLiveListingCard(l)).join('')}
+        </div>
+        <div style="font-size:11px;color:#94a3b8;padding:16px;text-align:center">Data from Realtor.com via US Real Estate Listings API</div>
+      `;
+    } else if (container) {
+      container.innerHTML = '';
+    }
+  });
 }
 
 function renderListingCard(listing) {
@@ -250,6 +299,33 @@ function renderListingCard(listing) {
           <div class="safety-badge sm" style="background:${hood.color}15;color:${hood.color}">🛡️ ${hood.safetyScore}</div>
           ${avgRating ? `<div class="review-badge">⭐ ${avgRating} (${reviews.length})</div>` : ''}
           ${listing.pets ? '<span class="pet-badge">🐾</span>' : ''}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderLiveListingCard(listing) {
+  const placeholderImg = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="250" fill="%23e2e8f0"><rect width="400" height="250"/><text x="50%" y="50%" text-anchor="middle" dy=".3em" fill="%2394a3b8" font-size="16">No Photo</text></svg>');
+  const img = listing.image || placeholderImg;
+  const beds = listing.bedrooms === 0 ? 'Studio' : listing.bedrooms != null ? `${listing.bedrooms}bd` : '?bd';
+  const baths = listing.bathrooms != null ? `${listing.bathrooms}ba` : '';
+  const sqft = listing.sqft ? `${listing.sqft.toLocaleString()} sqft` : '';
+  const meta = [beds, baths, sqft].filter(Boolean).join(' · ');
+
+  return `
+    <div class="listing-card" onclick="window.open('${listing.href || '#'}', '_blank')">
+      <div class="listing-img" style="background-image:url('${img}')">
+        ${listing.pets ? '<span class="tag roommate-tag" style="background:#10b981">🐾 Pets OK</span>' : ''}
+        <span class="tag price-tag">$${listing.price.toLocaleString()}/mo</span>
+      </div>
+      <div class="listing-body">
+        <div class="listing-title">${listing.title}</div>
+        <div class="listing-meta">${meta}</div>
+        <div class="listing-location">📍 ${listing.address || `${listing.city}, ${listing.state}`}</div>
+        <div class="listing-footer">
+          ${listing.photoCount ? `<span class="review-badge">📷 ${listing.photoCount} photos</span>` : ''}
+          <span class="review-badge" style="color:#10b981;font-weight:600">View on Realtor.com →</span>
         </div>
       </div>
     </div>
