@@ -105,7 +105,13 @@ function renderHome() {
           <span class="hero-search-icon">🔍</span>
           <input type="text" id="heroSearchInput" placeholder="Search by city, neighborhood, or keyword..."
                  oninput="currentFilters.search = this.value"
-                 onkeydown="if(event.key==='Enter'){currentFilters.search=this.value;switchView('search');}" />
+                 onkeydown="if(event.key==='Enter'){doSearch(this.value);}" />
+          <button class="hero-search-btn" aria-label="Search" onclick="doSearch(document.getElementById('heroSearchInput').value)">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <path d="M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M13 5l7 7-7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
         </div>
       </div>
     </div>
@@ -198,6 +204,7 @@ function renderFeaturedCard(listing) {
 
 function renderListings() {
   const filtered = getFilteredListings();
+  console.debug('renderListings', { filters: currentFilters, results: filtered.length });
   const cities = [...new Set(NEIGHBORHOODS.map(n => n.city))];
 
   document.getElementById('view-search').innerHTML = `
@@ -208,9 +215,9 @@ function renderListings() {
       </div>
       <div class="search-input-wrap">
         <span>🔍</span>
-        <input type="text" id="searchInput" placeholder="Search listings..."
-               value="${currentFilters.search}" oninput="handleSearchInput(this.value)"
-               onkeydown="if(event.key==='Enter'){currentFilters.search=this.value;updateListingResults();}" />
+         <input type="text" id="searchInput" placeholder="Search listings..."
+           oninput="handleSearchInput(this.value)"
+           onkeydown="if(event.key==='Enter'){currentFilters.search=this.value;updateListingResults();}" />
       </div>
     </div>
 
@@ -274,6 +281,12 @@ function renderListings() {
       container.innerHTML = '';
     }
   });
+
+  // After rendering, set the search input value safely and focus if needed
+  setTimeout(() => {
+    const input = document.getElementById('searchInput');
+    if (input) input.value = currentFilters.search || '';
+  }, 0);
 }
 
 function renderListingCard(listing) {
@@ -631,12 +644,19 @@ function renderCompare() {
 function getFilteredListings() {
   return LISTINGS.filter(l => {
     const hood = NEIGHBORHOODS.find(n => n.id === l.neighborhood);
+
+    // Flexible search: split query into tokens and require that each token appears
+    // in either the title, address, neighborhood name, or city.
     if (currentFilters.search) {
-      const q = currentFilters.search.toLowerCase();
-      const match = l.title.toLowerCase().includes(q) || l.address.toLowerCase().includes(q) ||
-                    hood.name.toLowerCase().includes(q) || hood.city.toLowerCase().includes(q);
-      if (!match) return false;
+      const q = currentFilters.search.trim().toLowerCase();
+      if (q.length) {
+        const tokens = q.split(/\s+/).filter(Boolean);
+        const haystack = [l.title, l.address, hood.name, hood.city].join(' ').toLowerCase();
+        const allMatch = tokens.every(t => haystack.includes(t));
+        if (!allMatch) return false;
+      }
     }
+
     if (l.price > currentFilters.maxPrice) return false;
     if (currentFilters.bedrooms !== 'any') {
       const beds = parseInt(currentFilters.bedrooms);
@@ -644,19 +664,26 @@ function getFilteredListings() {
     }
     if (currentFilters.pets && !l.pets) return false;
     if (currentFilters.roommate && !l.roommate) return false;
-    if (currentFilters.city !== 'all' && hood.city !== currentFilters.city) return false;
+    if (currentFilters.city !== 'all' && hood.city.toLowerCase().trim() !== String(currentFilters.city).toLowerCase().trim()) return false;
     return true;
   });
 }
 
 function updateFilter(key, value) {
-  currentFilters[key] = value;
+  currentFilters[key] = (typeof value === 'string') ? value.trim() : value;
   // Update price label if that's what changed
   if (key === 'maxPrice') {
     const label = document.querySelector('.price-filter strong');
     if (label) label.textContent = `$${value.toLocaleString()}`;
   }
-  updateListingResults();
+  // If changing the city, re-render the whole listings view so the select/options stay in sync.
+  if (key === 'city' && currentView === 'search') {
+    renderListings();
+  } else {
+    updateListingResults();
+  }
+
+  console.debug('Filters updated', currentFilters);
 }
 
 function toggleFilter(key) {
@@ -671,6 +698,9 @@ function handleSearchInput(value) {
   currentFilters.search = value;
   clearTimeout(searchDebounceTimer);
   searchDebounceTimer = setTimeout(() => {
+    // If the user typed a city name, sync the city filter (only if user hasn't chosen a city)
+    const detectedCity = detectCityFromQuery(currentFilters.search);
+    if (detectedCity && currentFilters.city === 'all') currentFilters.city = detectedCity;
     updateListingResults();
     // Restore focus to search input after DOM update
     const input = document.getElementById('searchInput');
@@ -681,6 +711,44 @@ function handleSearchInput(value) {
       input.setSelectionRange(len, len);
     }
   }, 300);
+}
+
+// Called by hero search and search button — navigates to search view and focuses input
+function doSearch(query) {
+  currentFilters.search = (query || '').trim();
+  // If the query matches a known city and no explicit city is selected, set the city filter
+  const detectedCity = detectCityFromQuery(currentFilters.search);
+  if (detectedCity && currentFilters.city === 'all') currentFilters.city = detectedCity;
+  switchView('search');
+  // Small delay to let the view render, then sync input and run search
+  setTimeout(() => {
+    const input = document.getElementById('searchInput');
+    if (input) {
+      input.value = currentFilters.search;
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+    updateListingResults();
+  }, 80);
+}
+
+function detectCityFromQuery(q) {
+  if (!q) return null;
+  const cities = [...new Set(NEIGHBORHOODS.map(n => n.city))];
+  // Remove punctuation and common state abbreviations, then normalize
+  let norm = q.trim().toLowerCase();
+  norm = norm.replace(/[,\.]/g, ''); // strip punctuation
+  norm = norm.replace(/\bwa\b|\bwa\.?$|\bwashington\b/gi, '').trim();
+  // Exact match first
+  const exact = cities.find(c => c.toLowerCase() === norm);
+  if (exact) return exact;
+  // If query contains a city token, match it
+  const tokens = norm.split(/\s+/).filter(Boolean);
+  for (const t of tokens) {
+    const match = cities.find(c => c.toLowerCase() === t);
+    if (match) return match;
+  }
+  return null;
 }
 
 function updateListingResults() {

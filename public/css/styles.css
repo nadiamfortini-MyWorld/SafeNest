@@ -114,6 +114,16 @@ body {
 .hero-search input::placeholder { color: #94a3b8; }
 .hero-search-icon { font-size: 18px; }
 
+/* Modern arrow-only search button inside hero */
+.hero-search-btn {
+  width: 42px; height: 42px; border-radius: 10px;
+  background: var(--primary); border: none; color: #fff;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer; box-shadow: 0 6px 18px rgba(16,185,129,0.18);
+}
+.hero-search-btn svg { display: block; color: #fff; }
+.hero-search-btn:active { transform: translateY(1px); }
+
 /* ── Stats Row ── */
 
 .home-stats {
